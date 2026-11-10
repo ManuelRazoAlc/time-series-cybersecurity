@@ -1,0 +1,23 @@
+{
+  "primary_seed": 20261027,
+  "seeds": [20261027, 20261028, 20261029],
+  "days": 120,
+  "split_days": [84, 18, 18],
+  "base_minutes": 5,
+  "detection_minutes": 15,
+  "forecast_minutes": 60,
+  "threshold_quantile": 0.99,
+  "forecast_band": 0.9,
+  "forecast_origin_step_hours": 6,
+  "time_convention": "Horas y dias transcurridos desde cero",
+  "dgp": {
+    "baseline": 18,
+    "daily_sin": 0.45,
+    "daily_cos2": 0.15,
+    "ar1": 0.7,
+    "innovation_sd": 0.08,
+    "monitor_rate": 0.05,
+    "monitor_floor": 0.2,
+    "attack_monitor_multiplier": 0.4
+  }
+}

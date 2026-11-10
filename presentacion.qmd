@@ -1,0 +1,508 @@
+---
+title: "Series de tiempo para ciberseguridad"
+subtitle: "Detección de anomalías y anticipación de alertas"
+pagetitle: "Series de tiempo para ciberseguridad"
+lang: es
+format:
+  revealjs:
+    output-file: presentacion.html
+    theme: default
+    css: recursos_presentacion/estilo.css
+    template-partials:
+      - recursos_presentacion/title-slide.html
+    width: 1280
+    height: 720
+    margin: 0
+    center: false
+    transition: none
+    slide-number: c/t
+    controls: false
+    menu: false
+    help: false
+    progress: false
+    hash: true
+    navigation-mode: linear
+    slide-level: 2
+    embed-resources: true
+    html-math-method: mathml
+    include-after-body: recursos_presentacion/incluir.html
+    auto-stretch: false
+execute:
+  echo: false
+  warning: false
+  message: false
+  cache: false
+---
+
+
+
+```{r}
+#| label: analisis-completo
+#| include: false
+source("R/analisis.R", encoding = "UTF-8")
+```
+
+```{r}
+#| label: configuracion
+#| include: false
+library(jsonlite)
+pred <- fmetric
+diag <- diagnostics
+f48 <- aggregate(cbind(mae, coverage) ~ model, data = subset(pred, scenario == 'Normal' & h == 48), FUN = mean)
+best48 <- f48[which.min(f48$mae), ]
+ref48 <- f48[f48$model == 'Ingenuo estacional', ]
+fnum <- function(x, n = 2) formatC(x, digits = n, format = 'f')
+fp <- aggregate(false_per_day ~ model, data = subset(det, scenario == 'Normal'), FUN = mean)
+texto_fp <- paste(paste0(fp$model, ': ', fnum(fp$false_per_day)), collapse = '; ')
+diag_ets <- subset(diag, seed == 20261027 & task == 'forecast' & model == 'ETS')$ljung_p
+anticipa <- anticipation_csv
+caso_ets <- subset(anticipa, model == 'ETS' & observed_surprise != observed_normal)[1, ]
+
+
+sost <- subset(det, seed == 20261027 & scenario == "Sostenido")
+sost_arima <- sost[sost$model == "ARIMA", ]
+sost_if <- sost[sost$model == "Isolation Forest", ]
+```
+
+## Miles de eventos. ¿Cuándo debemos sospechar?
+
+::: {.cuerpo}
+::: {.bloque}
+1 de 7 · Distinguir lo normal de lo sospechoso
+:::
+
+::: {.lead}
+Imaginemos una empresa cuyos servidores registran miles de accesos. Una mañana, los intentos aumentan de golpe. El equipo debe decidir si investiga y cómo se prepara para las alertas que vendrán.
+:::
+
+Seguiremos esa decisión con la revisión de Landauer y colaboradores (2025) y un experimento con datos simulados.
+:::
+
+## El artículo organiza las preguntas de la empresa
+
+::: {.cuerpo}
+::: {.bloque}
+1 de 7 · Distinguir lo normal de lo sospechoso
+:::
+
+Para decidir qué herramienta utilizar, primero necesitamos ubicar el problema. La revisión plantea tres preguntas que guiarán nuestro recorrido.
+
+**RQ1. ¿Dónde se utilizan las series de tiempo en ciberseguridad?**  
+Esto permite distinguir la detección inmediata de la planificación de carga futura.
+
+**RQ2. ¿Qué fuentes de datos son adecuadas?**  
+La respuesta determina qué puede observar y aprender cada modelo.
+
+**RQ3. ¿Qué restricciones imponen los datos y cómo se abordan?**  
+Aquí importan la ventana temporal, la estacionalidad y los errores que tolera el equipo.
+
+::: {.source}
+(Landauer et al., 2025, § 1, p. 2). Preguntas originales abreviadas. Al final volveremos a responderlas con la revisión y la simulación.
+:::
+:::
+
+## Para comparar métodos, construiremos un caso común
+
+::: {.cuerpo}
+::: {.bloque}
+1 de 7 · Distinguir lo normal de lo sospechoso
+:::
+
+::: {.columns}
+::: {.column width="50%"}
+### Lo que aporta la revisión
+
+Los autores buscan publicaciones y comparan sus aplicaciones, datos, métodos y formas de evaluación. Como cada trabajo estudia condiciones distintas, la revisión orienta la elección de modelos sin ofrecer una clasificación universal.
+:::
+::: {.column width="50%"}
+### Lo que añadimos nosotros
+
+Simularemos la actividad de una misma empresa y aplicaremos cuatro métodos bajo reglas comunes. Al conocer cuándo añadimos cada episodio, podremos observar qué detectan, qué omiten y qué consiguen pronosticar.
+:::
+:::
+
+::: {.takeaway}
+Antes de elegir un modelo, necesitamos decidir qué información recibirá. Empecemos por construir la serie.
+:::
+
+::: {.source}
+(Landauer et al., 2025, § 4, tablas 1–4): revisión amplia y representativa. Las cifras de esta presentación proceden de nuestra simulación.
+:::
+:::
+
+## De los registros de la empresa a una serie temporal
+
+::: {.cuerpo}
+::: {.bloque}
+2 de 7 · Convertir eventos en una serie temporal
+:::
+
+::: {.columns}
+::: {.column width="50%"}
+### Primero decidimos qué contar
+
+Cada registro informa cuándo ocurrió un acceso. Al contar los accesos dentro de ventanas de duración $\Delta$, obtenemos una serie regular:
+
+$$X_k=\sum_j\mathbf{1}_{[k\Delta,(k+1)\Delta)}(t_j).$$
+
+Simulamos directamente estos conteos cada cinco minutos, con mayor actividad en ciertas horas y variaciones normales con memoria temporal.
+:::
+::: {.column width="50%"}
+### Después distinguimos dos variables
+
+La intensidad $\lambda_t$ combina un perfil diario con una perturbación autorregresiva. A partir de ella generamos:
+
+$$\begin{aligned}
+X_t\mid\lambda_t&\sim\operatorname{Poisson}(\lambda_t),\\
+A_t\mid\lambda_t&\sim\operatorname{Poisson}(0.05\lambda_t+0.2).
+\end{aligned}$$
+
+$X_t$ cuenta intentos de acceso. $A_t$ cuenta alertas de un monitor previo, que después deberá revisar el equipo.
+:::
+:::
+
+::: {.source}
+Simulamos 120 días y tres repeticiones aleatorias. Los avisos de nuestros detectores son una salida distinta de $A_t$.
+:::
+:::
+
+## Ya sabemos qué contar. ¿Cada cuánto lo observamos?
+
+::: {.cuerpo}
+::: {.bloque}
+2 de 7 · Convertir eventos en una serie temporal
+:::
+
+La empresa podría revisar los accesos cada cinco minutos o esperar una hora. Agrupemos los mismos datos para observar qué ocurre con un episodio breve.
+
+::: {.visual}
+```{=html}
+<div class="controlbar"><label>Ventana <select id="gran-window"><option value="5">5 minutos</option><option value="15">15 minutos</option><option value="60" selected>60 minutos</option></select></label></div>
+<div id="agregacion" class="interactive-plot" style="height:310px"></div>
+```
+:::
+
+
+::: {.takeaway}
+Al ampliar la ventana, el pulso se mezcla con más actividad normal. Elegiremos quince minutos para comparar los detectores con la misma información.
+:::
+
+::: {.source}
+Normalizamos los conteos por minuto para comparar el contraste. El selector cambia la agregación y no reentrena los modelos.
+:::
+:::
+
+## Para detectar una desviación, aprendemos una referencia
+
+::: {.cuerpo}
+::: {.bloque}
+3 de 7 · Identificar desviaciones del comportamiento normal
+:::
+
+Con la serie construida, calcularemos qué actividad esperar antes de observar el siguiente intervalo. Si el dato se aleja suficientemente de esa referencia, emitiremos un aviso.
+
+::: {.columns}
+::: {.column width="50%"}
+### ARIMA: memoria reciente
+
+$$ (1-\phi_1B-\phi_2B^2)z_t=(1+\theta B)\varepsilon_t.$$
+
+ARIMA(2,0,1) relaciona el conteo con valores y errores anteriores. Aquí $z_t=X_t-\mu$ y $B$ desplaza un intervalo. Fijamos $d=0$ porque no añadimos tendencia estocástica.
+:::
+::: {.column width="50%"}
+### SARIMA: memoria del ciclo diario
+
+$$ (1-\phi B)(1-\Phi B^s)z_t=(1+\theta B)\varepsilon_t.$$
+
+SARIMA(1,0,1)(1,0,0) incorpora además un rezago diario. Usamos $s=96$ para los conteos de quince minutos y $s=24$ para las alertas horarias.
+:::
+:::
+
+::: {.source}
+Órdenes fijados antes de la prueba. (Landauer et al., 2025, §§ 6.1.4–6.1.5). SARIMA se menciona en una aplicación comercial y como extensión sugerida.
+:::
+:::
+
+## Otras dos maneras de representar la actividad habitual
+
+::: {.cuerpo}
+::: {.bloque}
+3 de 7 · Identificar desviaciones del comportamiento normal
+:::
+
+La referencia también puede construirse actualizando un perfil diario o aprendiendo qué combinaciones de datos resultan inusuales.
+
+::: {.columns}
+::: {.column width="50%"}
+### ETS actualiza nivel y estacionalidad
+
+$$\widehat X_{t|t-1}=\ell_{t-1}+s_{t-m}.$$
+
+El valor esperado combina un nivel con el efecto de la hora del día. Los errores recientes permiten corregir esos estados. Implementamos Holt–Winters aditivo sin tendencia, con recursión de media ETS(A,N,A).
+:::
+::: {.column width="50%"}
+### Isolation Forest busca observaciones raras
+
+Un bosque de 200 árboles realiza particiones aleatorias. Cuando una observación se aísla con pocos pasos, recibe una puntuación de anomalía mayor.
+
+Recibe el conteo actual, sus rezagos y la fase diaria. Como utiliza el dato observado, detecta al cierre y no produce un pronóstico del conteo futuro.
+:::
+:::
+
+::: {.takeaway}
+Ya tenemos cuatro formas de señalar desviaciones. Ahora debemos evaluarlas sin mostrarles las respuestas futuras.
+:::
+
+::: {.source}
+(Landauer et al., 2025, §§ 6.1.1 y 6.2.2). Isolation Forest usa muestras de 256 observaciones por árbol; su puntuación no es una probabilidad de ataque.
+:::
+:::
+
+## La prueba debe respetar el orden de la información
+
+::: {.cuerpo}
+::: {.bloque}
+3 de 7 · Identificar desviaciones del comportamiento normal
+:::
+
+Si ajustáramos las reglas viendo los ataques de prueba, la comparación sería demasiado favorable. Por eso dividimos la historia de la empresa en tres periodos consecutivos.
+
+| Primeros 84 días | Siguientes 18 días | Últimos 18 días |
+|:---|:---|:---|
+| Aprendemos la actividad normal | Calibramos los umbrales y las bandas | Medimos lo que ocurre ante nuevos datos |
+
+Para detectar, fijamos el umbral en el percentil 99 de los errores absolutos de calibración, o de las puntuaciones de Isolation Forest. Después mantenemos esa regla y actualizamos los estados solo con datos ya observados, sin reestimar los coeficientes.
+
+::: {.takeaway}
+Las etiquetas nos servirán para contar aciertos y errores al final. Con las reglas fijadas, podemos introducir los episodios.
+:::
+:::
+
+## ¿Qué cambia si el ataque dura minutos, horas o días?
+
+::: {.cuerpo}
+::: {.bloque}
+4 de 7 · Probar ataques breves, persistentes y periódicos
+:::
+
+Sobre la misma actividad de fondo añadimos un pulso breve, un aumento sostenido y ráfagas periódicas. Así cambia la forma del episodio, mientras conservamos los modelos y la regla de evaluación.
+
+::: {.visual}
+```{=html}
+<div class="controlbar"><label>Escenario <select id="det-scenario"></select></label><label>Modelo <select id="det-model"></select></label><label>Repetición <select id="det-seed"></select></label></div>
+<div id="deteccion" class="interactive-plot" style="height:330px"></div>
+<div id="det-metrics" class="metricline"></div>
+```
+:::
+
+
+::: {.source}
+La franja identifica el episodio añadido y los símbolos muestran avisos correctos o falsos. El resumen evalúa los 18 días completos, aunque ampliemos solo unas horas.
+:::
+:::
+
+## La duración del episodio cambia lo que detecta cada modelo
+
+::: {.cuerpo}
+::: {.bloque}
+4 de 7 · Probar ataques breves, persistentes y periódicos
+:::
+
+Ahora reunimos las tres repeticiones. La sensibilidad mide qué proporción de intervalos maliciosos conseguimos señalar. Para decidir si esos avisos son útiles, también debemos contar cuántos aparecen cuando no hay ataque.
+
+::: {.visual}
+```{=html}
+<div id="comparacion-detectores" class="interactive-plot" style="height:275px" aria-label="Sensibilidad de los detectores por tipo de episodio"></div>
+```
+:::
+
+
+::: {.source}
+Falsos avisos por día en prueba normal, promedio de tres repeticiones: `r texto_fp`. Estas cifras cuentan intervalos señalados, no incidentes independientes.
+:::
+
+::: {.takeaway}
+Todavía falta una distinción: detectar el comienzo de un episodio no garantiza reconocer toda su duración.
+:::
+:::
+
+## Un primer aviso no cuenta toda la historia del ataque
+
+::: {.cuerpo}
+::: {.bloque}
+4 de 7 · Probar ataques breves, persistentes y periódicos
+:::
+
+Los cuatro métodos detectan el episodio sostenido. Sin embargo, ARIMA señala `r sost_arima$tp` de sus `r sost_arima$tp+sost_arima$fn` intervalos, frente a `r sost_if$tp` de Isolation Forest. Observemos cómo cambia la referencia al incorporar la actividad alterada.
+
+::: {.visual}
+```{=html}
+<div class="controlbar"><label>Vista <select id="sust-model"></select></label></div>
+<div id="sostenido" class="interactive-plot" style="height:320px"></div>
+<div id="sust-metrics" class="metricline"></div>
+```
+:::
+
+
+::: {.takeaway}
+Hasta aquí reconocimos desviaciones. Antes de llamarlas ataques, debemos preguntar qué sabemos sobre su causa.
+:::
+
+::: {.source}
+(Landauer et al., 2025, § 7.3.1): distinguir episodios detectados, demora y proporción de intervalos señalados.
+:::
+:::
+
+## La misma subida puede tener dos causas distintas
+
+::: {.cuerpo}
+::: {.bloque}
+5 de 7 · Distinguir actividad anormal de actividad maliciosa
+:::
+
+Supongamos que la empresa realiza una prueba autorizada que genera exactamente los mismos accesos que el pulso malicioso. Conservamos los datos y cambiamos únicamente el contexto conocido por el equipo.
+
+::: {.visual}
+```{=html}
+<div class="controlbar"><label>Contexto conocido <select id="context"><option value="Pico">Accesos maliciosos</option><option value="Benigno">Prueba autorizada</option></select></label></div>
+<div id="malicia" class="interactive-plot" style="height:280px"></div>
+<p id="context-result" class="metricline"></p>
+```
+:::
+
+
+::: {.takeaway}
+El modelo reconoce una anomalía, pero atribuir malicia requiere autorización, identidad u otra evidencia. El límite está también en la información disponible.
+:::
+:::
+
+## Además de investigar, la empresa debe preparar al equipo
+
+::: {.cuerpo}
+::: {.bloque}
+6 de 7 · Anticipar la cantidad de alertas
+:::
+
+Ahora cambia el objetivo: pronosticaremos las alertas del monitor previo por hora para anticipar carga de trabajo. El origen es el momento de emitir el pronóstico y el horizonte indica qué hora futura queremos prever.
+
+::: {.visual}
+```{=html}
+<div class="controlbar"><label>Modelo <select id="fore-model"></select></label><label>Horizonte <select id="fore-h"><option>1</option><option>6</option><option>24</option><option selected>48</option></select> horas</label><label>Origen <select id="fore-origin"></select></label></div>
+<div id="pronostico" class="interactive-plot" style="height:290px"></div>
+<div id="fore-metrics" class="metricline"></div>
+```
+:::
+
+
+::: {.source}
+Comparamos ARIMA, SARIMA y ETS con repetir el día anterior. Isolation Forest no pronostica conteos. El horizonte 24 evalúa la hora $t+24$, no el total del día.
+:::
+:::
+
+## Para comparar pronósticos, reunimos sus errores
+
+::: {.cuerpo}
+::: {.bloque}
+6 de 7 · Anticipar la cantidad de alertas
+:::
+
+Una trayectoria aislada puede resultar engañosa. Por eso repetimos el pronóstico cada seis horas y medimos el error absoluto medio (MAE) sobre 65 orígenes de prueba por repetición.
+
+::: {.visual}
+```{=html}
+
+<div id="mae" class="interactive-plot" style="height:300px"></div>
+<p id="mae-result" class="mae-result"></p>
+```
+:::
+
+
+En este generador diario, `r best48$model` obtiene un MAE de **`r fnum(best48$mae)` alertas/h** a 48 horas, frente a `r fnum(ref48$mae)` del ingenuo estacional.
+
+::: {.takeaway}
+El menor error favorece a ETS en este experimento. Para confiar en el resultado, todavía debemos revisar qué dejó sin explicar y cómo funcionan sus bandas.
+:::
+:::
+
+## Un error bajo no asegura que la incertidumbre esté bien medida
+
+::: {.cuerpo}
+::: {.bloque}
+6 de 7 · Anticipar la cantidad de alertas
+:::
+
+Si los errores conservan un patrón, el modelo aún deja información sin aprovechar. La autocorrelación residual muestra esa dependencia, mientras Ljung–Box la contrasta de manera conjunta.
+
+::: {.visual}
+```{=html}
+<div id="diagnosticos" class="interactive-plot" style="height:210px" aria-label="Autocorrelación residual de ARIMA, SARIMA y ETS"></div>
+```
+:::
+
+
+En pronóstico, ARIMA y SARIMA dejan dependencia significativa. Para ETS no la rechazamos en la repetición principal (p = `r fnum(diag_ets, 3)`), pero su banda a 48 horas cubre **`r fnum(100*best48$coverage, 1)`%** de las observaciones, por debajo del 90% buscado.
+
+::: {.takeaway}
+ETS describe mejor esta rutina diaria. Eso aún no responde si podría anticipar una irrupción inesperada.
+:::
+
+::: {.source}
+Bandas marginales empíricas, calibradas con errores anteriores. No rechazar Ljung–Box no demuestra que todo el modelo sea correcto.
+:::
+:::
+
+## ¿Qué ocurre cuando el ataque todavía no deja señales?
+
+::: {.cuerpo}
+::: {.bloque}
+6 de 7 · Anticipar la cantidad de alertas
+:::
+
+Imaginemos dos futuros con el mismo historial disponible: en uno continúa la actividad habitual y en otro comienza un pulso sin precursores observables. Antes del episodio, el modelo debe emitir el mismo pronóstico en ambos casos.
+
+::: {.visual}
+```{=html}
+<div id="anticipacion" class="interactive-plot" style="height:235px" aria-label="Pronóstico anterior al ataque y dos futuros con el mismo historial"></div>
+```
+:::
+
+
+En la primera hora afectada, ETS había previsto **`r fnum(caso_ets$prediction, 1)` alertas y se observan `r caso_ets$observed_surprise`**, a cinco horas del origen. Reconocer una rutina ayuda a planificar carga, pero anticipar ese inicio exigiría información precursora.
+
+::: {.takeaway}
+Con estas diferencias entre detectar y anticipar, ya podemos responder qué debe guiar la selección de modelos.
+:::
+:::
+
+## Volvamos a la empresa y a las tres preguntas del artículo
+
+::: {.cuerpo}
+::: {.bloque}
+7 de 7 · Concluir cómo seleccionar los modelos
+:::
+
+**RQ1. ¿Para qué sirven las series de tiempo?** La revisión abarca desde detección en equipos y redes hasta pronósticos de amenazas y vulnerabilidades. Nuestra empresa ilustra dos decisiones diferentes: investigar desviaciones y preparar la carga de alertas.
+
+**RQ2. ¿Qué datos necesitamos?** Logs, tráfico, sensores e informes ofrecen información distinta. En la simulación, agrupar cambió el contraste y los conteos por sí solos no permitieron distinguir una prueba autorizada de un ataque.
+
+**RQ3. ¿Qué limita a los métodos?** La estacionalidad, la adaptación, la duración del episodio y la ausencia de precursores afectaron las respuestas. Las soluciones de la revisión deben elegirse según esas condiciones.
+
+::: {.takeaway}
+La empresa debe elegir el modelo según la decisión, la información disponible y los errores que puede tolerar. Un único generador con tres repeticiones no establece un ganador universal.
+:::
+:::
+
+## Referencias
+
+::: {.cuerpo}
+::: {.bloque}
+7 de 7 · Concluir cómo seleccionar los modelos
+:::
+
+::: {.referencias}
+Hyndman, R. J., & Athanasopoulos, G. (2021). *Forecasting: Principles and practice* (3rd ed.). OTexts. [https://otexts.com/fpp3/](https://otexts.com/fpp3/)
+
+Landauer, M., Skopik, F., Stojanović, B., Flatscher, A., & Ullrich, T. (2025). A review of time-series analysis for cyber security analytics: From intrusion detection to attack prediction. *International Journal of Information Security, 24*, Article 3. [https://doi.org/10.1007/s10207-024-00921-0](https://doi.org/10.1007/s10207-024-00921-0)
+:::
+:::
+
