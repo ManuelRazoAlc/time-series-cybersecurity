@@ -1,0 +1,4 @@
+# Diapositivas generadas y recursos de terceros: no cuentan en las estadisticas de lenguajes.
+*.html linguist-generated=true
+resultados/** linguist-generated=true
+recursos_presentacion/** linguist-vendored=true
